@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solana 自动领水监控台</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- 添加 Solana Web3.js 库 -->
+    <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><i class="fas fa-coins"></i> Solana 自动领水监控台</h1>
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">正在连接...</span>
+            </div>
+        </header>
+
+        <div class="dashboard">
+            <div class="top-three-cards">
+                <!-- 系统状态 -->
+                <div class="card status-card">
+                    <h3><i class="fas fa-heartbeat"></i> 服务状态</h3>
+                    <div class="status-grid">
+                        <div class="status-item">
+                            <span class="label">运行状态</span>
+                            <span class="value" id="runningStatus">-</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="label">当前代理</span>
+                            <span class="value" id="currentProxy">-</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="label">活跃账户</span>
+                            <span class="value" id="activeAccounts">-</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="label">失败次数</span>
+                            <span class="value" id="failureCount">-</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="label">Solana网络</span>
+                            <span class="value" id="solanaNetwork">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 统计信息 -->
+                <div class="card stats-card">
+                    <h3><i class="fas fa-chart-line"></i> 统计信息</h3>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-number" id="totalAirdrops">0</div>
+                            <div class="stat-label">总空投次数</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-number" id="totalSol">0</div>
+                            <div class="stat-label">总获得 SOL</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-number" id="totalTransfers">0</div>
+                            <div class="stat-label">总转账次数</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-number" id="uptime">0h</div>
+                            <div class="stat-label">运行时间</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 控制面板 -->
+                <div class="card controls-card">
+                    <h3><i class="fas fa-cogs"></i> 控制面板</h3>
+                    <div class="controls-grid">
+                        <button class="btn btn-success" id="startBtn" onclick="startSystem()">
+                            <i class="fas fa-play"></i> 启动服务
+                        </button>
+                        <button class="btn btn-warning" id="stopBtn" onclick="stopSystem()">
+                            <i class="fas fa-stop"></i> 停止服务
+                        </button>
+                        <button class="btn btn-info" id="switchProxyBtn" onclick="switchProxy()">
+                            <i class="fas fa-exchange-alt"></i> 切换代理
+                        </button>
+                        <button class="btn btn-danger" id="resetBtn" onclick="resetSystem()">
+                            <i class="fas fa-redo"></i> 重启服务
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 账户管理 -->
+            <div class="card accounts-card">
+                <h3><i class="fas fa-wallet"></i> 账户管理</h3>
+                <div class="accounts-header">
+                    <div class="account-summary">
+                        <span>主账户余额: <strong id="mainBalance">0 SOL</strong> <small id="balanceSource" style="color: #6b7280;">(链上实时)</small></span>
+                        <div class="main-balance-actions">
+                            <button class="btn" id="refreshBalanceBtn" onclick="refreshBalances(event)"><i class="fas fa-sync-alt"></i> 刷新余额</button>
+                            <button class="btn" id="mergeBalancesBtn" onclick="mergeBalances(event)"><i class="fas fa-compress-arrows-alt"></i> 合并余额</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="accounts-table-container">
+                    <div class="table-header">
+                        <div class="table-row">
+                            <div class="table-cell">序号</div>
+                            <div class="table-cell">地址</div>
+                            <div class="table-cell">余额</div>
+                            <div class="table-cell">状态</div>
+                            <div class="table-cell">最后活动</div>
+                        </div>
+                    </div>
+                    <div class="table-body" id="accountsTableBody">
+                        <!-- 账户列表将在这里动态生成 -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 日志面板 -->
+            <div class="card logs-card">
+                <h3><i class="fas fa-file-alt"></i> 实时日志</h3>
+                <div class="logs-controls">
+                    <button class="btn btn-secondary" onclick="clearLogs()">
+                        <i class="fas fa-trash"></i> 清空日志
+                    </button>
+                    <button class="btn btn-secondary" onclick="toggleAutoScroll()">
+                        <i class="fas fa-arrow-down"></i> <span id="autoScrollText">自动滚动</span>
+                    </button>
+                </div>
+                <div class="logs-container" id="logsContainer">
+                    <!-- 日志内容将在这里显示 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

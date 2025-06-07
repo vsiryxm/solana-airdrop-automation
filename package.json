@@ -1,0 +1,41 @@
+{
+  "name": "solana-airdrop-automation",
+  "version": "1.0.0",
+  "description": "Automated Solana devnet airdrop tool with IP rotation and balance management",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "dev": "node src/main.js --dev",
+    "web": "node src/web-server.js",
+    "generate-accounts": "node src/account-manager.js --generate",
+    "check-balance": "node src/solana-client.js --check-all",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "solana",
+    "airdrop",
+    "automation",
+    "proxy",
+    "devnet"
+  ],
+  "author": "yangxinmin",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "chalk": "^4.1.2",
+    "express": "^4.18.2",
+    "fs-extra": "^11.1.1",
+    "moment": "^2.29.4",
+    "node-cron": "^3.0.3",
+    "winston": "^3.11.0",
+    "winston-daily-rotate-file": "^4.7.1",
+    "ws": "^8.18.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610"
+}

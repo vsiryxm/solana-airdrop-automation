@@ -1,0 +1,41 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# macOS
+.DS_Store
+
+# 日志和运行时
+logs/
+*.log
+*.pid
+*.pid.lock
+
+# 本地配置和敏感数据
+config/accounts.json
+config/config.json
+
+# 临时和缓存
+*.tmp
+temp/
+data/
+
+# VSCode
+.vscode/
+
+# 其他
+.env
+*.swp
+*.swo
+prompt.md 
+
+
+# Web编译缓存（如有）
+web/dist/
+web/.cache/
+
+# 备份文件
+*~
+*.bak
