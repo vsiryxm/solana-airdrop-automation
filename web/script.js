@@ -271,11 +271,51 @@ function updateStatusDisplay() {
     const runningStatus = document.getElementById('runningStatus');
     const failureCount = document.getElementById('failureCount');
     const activeAccounts = document.getElementById('activeAccounts');
+    const systemMode = document.getElementById('systemMode');
     
     if (systemData.status) {
         const isRunning = systemData.status.running;
-        runningStatus.textContent = isRunning ? '运行中' : '已停止';
-        runningStatus.style.color = isRunning ? '#10b981' : '#ef4444';
+        const isHibernating = systemData.status.isHibernating;
+        const nextResetTime = systemData.status.nextResetTime;
+        
+        // 更新运行状态显示
+        if (isHibernating) {
+            runningStatus.textContent = '休眠中';
+            runningStatus.style.color = '#f59e0b'; // 橙色表示休眠
+            
+            // 如果有下次重置时间，显示倒计时
+            if (nextResetTime) {
+                const nextReset = new Date(nextResetTime);
+                const now = new Date();
+                const timeDiff = nextReset.getTime() - now.getTime();
+                
+                if (timeDiff > 0) {
+                    const hours = Math.floor(timeDiff / (1000 * 60 * 60));
+                    const minutes = Math.floor((timeDiff % (1000 * 60 * 60)) / (1000 * 60));
+                    runningStatus.textContent = `休眠中 (${hours}h${minutes}m后重置)`;
+                }
+            }
+        } else if (isRunning) {
+            runningStatus.textContent = '运行中';
+            runningStatus.style.color = '#10b981';
+        } else {
+            runningStatus.textContent = '已停止';
+            runningStatus.style.color = '#ef4444';
+        }
+        
+        // 更新系统模式显示
+        if (systemMode) {
+            if (isHibernating) {
+                systemMode.textContent = '休眠模式';
+                systemMode.style.color = '#f59e0b';
+            } else if (isRunning) {
+                systemMode.textContent = '正常运行';
+                systemMode.style.color = '#10b981';
+            } else {
+                systemMode.textContent = '已停止';
+                systemMode.style.color = '#6b7280';
+            }
+        }
         
         failureCount.textContent = systemData.status.failureCount || 0;
         failureCount.style.color = (systemData.status.failureCount || 0) > 5 ? '#ef4444' : '#4a5568';
@@ -284,7 +324,7 @@ function updateStatusDisplay() {
         activeAccounts.textContent = `${activeCount}/${systemData.accounts.length}`;
         
         // 更新按钮状态
-        updateButtonStates(isRunning);
+        updateButtonStates(isRunning && !isHibernating);
     }
 }
 
@@ -488,6 +528,7 @@ function getStatusClass(status) {
     switch (status) {
         case 'active': return 'active';
         case 'cooldown': return 'cooldown';
+        case 'disabled': return 'disabled';
         default: return 'inactive';
     }
 }
@@ -497,6 +538,7 @@ function getStatusText(status) {
     switch (status) {
         case 'active': return '活跃';
         case 'cooldown': return '冷却中';
+        case 'disabled': return '已停用';
         default: return '未激活';
     }
 }

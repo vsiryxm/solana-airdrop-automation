@@ -4,6 +4,7 @@ const logger = Logger.default;
 const AccountManager = require('./account-manager');
 const ProxyManager = require('./proxy-manager');
 const SolanaClient = require('./solana-client');
+const SystemState = require('./system-state');
 const { 
   sleep, 
   randomDelay, 
@@ -25,12 +26,15 @@ class Scheduler {
     this.proxyManager = config.proxyManager || new ProxyManager(config.proxy || {});
     this.solanaClient = config.solanaClient || new SolanaClient(config.network || {});
     this.logger = config.logger || logger;
+    this.systemState = new SystemState();
     
     // 回调函数
     this.onStats = config.onStats || (() => {});
     this.onError = config.onError || (() => {});
     
     this.isRunning = false;
+    this.isHibernating = false;
+    this.dailyResetTimer = null;
     this.operationCount = 0;
     this.consecutiveFailures = 0;
     this.circuitBreakerTripped = false;
@@ -48,11 +52,64 @@ class Scheduler {
   }
 
   /**
+   * 恢复系统状态
+   */
+  async restoreSystemState() {
+    const state = this.systemState.getState();
+    
+    if (state.isHibernating) {
+      this.logger.info('Found hibernation state from previous session');
+      
+      // 检查休眠状态是否过期（跨天了）
+      if (this.systemState.isHibernationOutdated()) {
+        this.logger.info('Hibernation state is outdated, performing daily reset...');
+        await this.performDailyReset();
+        return;
+      }
+      
+      // 检查是否应该恢复休眠状态
+      if (this.systemState.shouldRestoreHibernation()) {
+        this.logger.info('Restoring hibernation state...');
+        this.isHibernating = true;
+        
+        // 恢复定时器
+        const timeUntilReset = this.systemState.getTimeUntilReset();
+        if (timeUntilReset > 0) {
+          this.logger.info(`Resuming hibernation, ${Math.round(timeUntilReset / 1000 / 60)} minutes until reset`);
+          this.dailyResetTimer = setTimeout(async () => {
+            await this.performDailyReset();
+          }, timeUntilReset);
+        } else {
+          // 时间已经过了，立即执行重置
+          this.logger.info('Reset time has passed, performing daily reset now...');
+          await this.performDailyReset();
+        }
+      } else {
+        // 重置时间已过，执行重置
+        this.logger.info('Reset time has passed, performing daily reset...');
+        await this.performDailyReset();
+      }
+    } else {
+      // 非休眠状态，检查账户状态
+      this.logger.info('No hibernation state found, checking account status...');
+      
+      // 检查是否所有账户都被停用
+      if (this.accountManager.areAllAccountsDisabled()) {
+        this.logger.warn('All accounts are disabled from previous session, entering hibernation...');
+        await this.enterHibernationMode();
+      }
+    }
+  }
+
+  /**
    * 初始化调度器
    */
   async initialize() {
     try {
       this.logger.info('Initializing scheduler...');
+      
+      // 加载系统状态
+      await this.systemState.loadState();
       
       // 检查组件是否已经初始化
       if (!this.accountManager.isLoaded) {
@@ -61,6 +118,9 @@ class Scheduler {
           throw new Error('No accounts available. Please generate accounts first.');
         }
       }
+      
+      // 恢复休眠状态（如果需要）
+      await this.restoreSystemState();
       
       // 代理管理器初始化失败不阻止系统运行
       try {
@@ -157,7 +217,7 @@ class Scheduler {
    * 主要操作循环
    */
   async runOperationLoop() {
-    while (this.isRunning) {
+    while (this.isRunning && !this.isHibernating) {
       try {
         // 检查熔断器状态
         if (this.circuitBreakerTripped) {
@@ -241,6 +301,10 @@ class Scheduler {
       }
       this.operationCount++;
       this.lastOperationTime = new Date();
+      
+      // 更新系统状态中的最后操作时间
+      await this.systemState.updateLastOperationTime();
+      
       // 检查连续失败
       if (results.airdrop?.success) {
         this.consecutiveFailures = 0;
@@ -248,10 +312,30 @@ class Scheduler {
         this.consecutiveFailures++;
         // 处理特定错误类型
         if (this.solanaClient.isRateLimitError(results.airdrop?.output || '')) {
-          logger.warn('Rate limit detected, switching proxy...');
+          logger.warn('Rate limit detected, disabling account and switching proxy...');
+          
+          // 停用账户并转移余额
+          const disableResult = await this.accountManager.disableAccountAndTransferBalance(
+            account.publicKey, 
+            'Rate limited on IP: ' + (currentIp || 'unknown')
+          );
+          
+          if (disableResult.success) {
+            logger.info(`Account ${account.id} disabled successfully`);
+            if (disableResult.transferred) {
+              logger.info(`Transferred ${disableResult.amount} SOL to main account`);
+            }
+          }
+          
+          // 切换代理
           await this.proxyManager.handleProxyError();
-          // 标记该账户今日在当前IP下已达上限
-          await this.accountManager.markAirdropLimitReachedToday(account.publicKey, currentIp);
+          
+          // 检查是否所有账户都已停用
+          if (this.accountManager.areAllAccountsDisabled()) {
+            logger.warn('All accounts are disabled, entering hibernation mode...');
+            await this.enterHibernationMode();
+            return results;
+          }
         }
         // 检查是否触发熔断器
         if (this.consecutiveFailures >= this.config.retry.maxConsecutiveFailures) {
@@ -414,7 +498,105 @@ class Scheduler {
   stop() {
     logger.info('Stopping scheduler...');
     this.isRunning = false;
+    this.isHibernating = false;
+    
+    // 清理定时器
+    if (this.dailyResetTimer) {
+      clearTimeout(this.dailyResetTimer);
+      this.dailyResetTimer = null;
+      logger.info('Daily reset timer cleared');
+    }
+    
     this.logDailyStats();
+  }
+
+  /**
+   * 进入休眠模式，等待每日0点重新生成账户
+   */
+  async enterHibernationMode() {
+    this.isHibernating = true;
+    this.isRunning = false;
+    
+    logger.info('Entering hibernation mode - all accounts disabled');
+    
+    // 设置每日0点的定时器
+    const nextResetTime = this.setupDailyResetTimer();
+    
+    // 保存休眠状态
+    await this.systemState.setHibernationState(true, nextResetTime);
+    
+    // 更新停用账户数量
+    const disabledCount = this.accountManager.accounts.filter(acc => acc.status === 'disabled').length;
+    await this.systemState.updateDisabledAccountsCount(disabledCount);
+  }
+
+  /**
+   * 设置每日0点重置定时器
+   */
+  setupDailyResetTimer() {
+    // 取消现有的定时器
+    if (this.dailyResetTimer) {
+      clearTimeout(this.dailyResetTimer);
+    }
+
+    // 计算到下一个0点的毫秒数
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    
+    const msUntilMidnight = tomorrow.getTime() - now.getTime();
+    
+    logger.info(`Next account regeneration scheduled at: ${tomorrow.toISOString()}`);
+    logger.info(`Time until regeneration: ${Math.round(msUntilMidnight / 1000 / 60 / 60)} hours`);
+
+    this.dailyResetTimer = setTimeout(async () => {
+      await this.performDailyReset();
+    }, msUntilMidnight);
+    
+    // 返回下次重置时间
+    return tomorrow.toISOString();
+  }
+
+  /**
+   * 执行每日重置
+   */
+  async performDailyReset() {
+    try {
+      logger.info('Performing daily reset - regenerating all accounts...');
+      
+      // 重新生成所有账户
+      const regenerateResult = await this.accountManager.regenerateAllAccounts(
+        this.config.accounts?.count || 50
+      );
+      
+      if (regenerateResult.success) {
+        logger.info(`Daily reset completed - generated ${regenerateResult.count} new accounts`);
+        
+        // 退出休眠模式，重新开始操作
+        this.isHibernating = false;
+        this.isRunning = true;
+        this.consecutiveFailures = 0;
+        this.circuitBreakerTripped = false;
+        
+        // 清除休眠状态
+        await this.systemState.clearHibernationState();
+        
+        // 更新系统启动时间
+        await this.systemState.setSystemStartTime();
+        
+        // 重新开始操作循环
+        await this.runOperationLoop();
+      } else {
+        logger.error('Daily reset failed, retrying in 1 hour...');
+        // 1小时后重试
+        setTimeout(() => this.performDailyReset(), 60 * 60 * 1000);
+      }
+    } catch (error) {
+      logger.error('Error during daily reset:', error);
+      // 1小时后重试
+      setTimeout(() => this.performDailyReset(), 60 * 60 * 1000);
+    }
   }
 
   /**
@@ -428,8 +610,12 @@ class Scheduler {
    * 获取运行状态
    */
   getStatus() {
+    const nextResetTime = this.isHibernating && this.dailyResetTimer ? this.getNextResetTime() : null;
+    
     return {
       isRunning: this.isRunning,
+      isHibernating: this.isHibernating,
+      nextResetTime: nextResetTime,
       operationCount: this.operationCount,
       consecutiveFailures: this.consecutiveFailures,
       circuitBreakerTripped: this.circuitBreakerTripped,
@@ -438,6 +624,17 @@ class Scheduler {
       proxyStats: this.proxyManager.getProxyStats(),
       accountStats: this.accountManager.getAccountStats()
     };
+  }
+
+  /**
+   * 获取下次重置时间
+   */
+  getNextResetTime() {
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    return tomorrow.toISOString();
   }
 
   /**

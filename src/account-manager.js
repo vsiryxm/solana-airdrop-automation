@@ -180,6 +180,68 @@ class AccountManager {
   }
 
   /**
+   * 增量生成账户（不清空现有账户）
+   * @param {number} count 要生成的账户数量
+   */
+  async generateAdditionalAccounts(count = 50) {
+    if (!this.isLoaded) {
+      await this.loadAccounts();
+    }
+
+    logger.info(`Starting to generate ${count} additional accounts...`);
+    const newAccounts = [];
+    const errors = [];
+    
+    for (let i = 0; i < count; i++) {
+      try {
+        const keyPair = await this.generateKeyPair();
+        const account = {
+          id: `account_${this.accounts.length + i + 1}`,
+          publicKey: keyPair.publicKey,
+          privateKey: keyPair.privateKey,
+          balance: 0,
+          lastUsed: null,
+          lastAirdrop: null,
+          lastTransfer: null,
+          errorCount: 0,
+          status: 'active',
+          created: keyPair.generated,
+          airdropLimitReachedDate: null
+        };
+        newAccounts.push(account);
+        logger.info(`Generated additional account ${i + 1}/${count}: ${truncateString(account.publicKey)}`);
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        errors.push(`Account ${i + 1}: ${error.message}`);
+        logger.error(`Failed to generate additional account ${i + 1}`, { error: error.message });
+      }
+    }
+    
+    if (newAccounts.length > 0) {
+      this.accounts.push(...newAccounts);
+      this.meta = {
+        generated: true,
+        count: this.accounts.length,
+        lastUsedIndex: this.meta.lastUsedIndex || -1,
+        created: this.meta.created || new Date().toISOString(),
+        updated: new Date().toISOString()
+      };
+      await this.saveAccounts();
+      logger.info(`Successfully generated ${newAccounts.length} additional accounts, total: ${this.accounts.length}`);
+    }
+    
+    if (errors.length > 0) {
+      logger.warn(`Failed to generate ${errors.length} additional accounts`, { errors });
+    }
+    
+    return {
+      success: newAccounts.length,
+      failed: errors.length,
+      accounts: newAccounts
+    };
+  }
+
+  /**
    * 获取下一个可用账户
    */
   async getNextAccount() {
@@ -364,6 +426,37 @@ class AccountManager {
   async initialize() {
     try {
       await this.loadAccounts();
+      
+      // 检查配置文件中的要求账户数量
+      const configPath = path.join(__dirname, '../config/config.json');
+      let requiredCount = 50; // 默认值
+      
+      try {
+        const config = await safeReadJson(configPath);
+        if (config.accounts && config.accounts.count) {
+          requiredCount = config.accounts.count;
+        }
+      } catch (error) {
+        logger.warn('Could not read config file, using default account count of 50');
+      }
+      
+      // 检查是否需要生成更多账户
+      const currentCount = this.accounts.length;
+      if (currentCount < requiredCount) {
+        const needToGenerate = requiredCount - currentCount;
+        logger.info(`Current accounts: ${currentCount}, Required: ${requiredCount}. Generating ${needToGenerate} more accounts...`);
+        
+        // 使用增量生成方法
+        const result = await this.generateAdditionalAccounts(needToGenerate);
+        if (result.success > 0) {
+          logger.info(`Successfully generated ${result.success} additional accounts. Total: ${this.accounts.length}`);
+        } else {
+          logger.error('Failed to generate required accounts');
+        }
+      } else {
+        logger.info(`Account count sufficient: ${currentCount}/${requiredCount}`);
+      }
+      
       logger.info('Account manager initialized successfully');
       return true;
     } catch (error) {
@@ -434,48 +527,110 @@ class AccountManager {
     }
     throw new Error('No active accounts available (all reached airdrop limit today on this IP)');
   }
-}
 
-// 命令行支持
-if (require.main === module) {
-  const args = process.argv.slice(2);
-  const accountManager = new AccountManager();
-  
-  if (args.includes('--generate')) {
-    const count = parseInt(args[args.indexOf('--generate') + 1]) || 50;
-    accountManager.generateAccounts(count)
-      .then(result => {
-        console.log(`Generated ${result.success} accounts successfully`);
-        if (result.failed > 0) {
-          console.log(`Failed to generate ${result.failed} accounts`);
+  /**
+   * 停用账户并转移余额
+   * @param {string} publicKey 公钥
+   * @param {string} reason 停用原因
+   */
+  async disableAccountAndTransferBalance(publicKey, reason = 'Rate limited') {
+    const account = this.accounts.find(acc => acc.publicKey === publicKey);
+    if (!account) {
+      logger.warn(`Account not found for disabling: ${publicKey}`);
+      return { success: false, error: 'Account not found' };
+    }
+
+    // 标记账户为停用状态
+    account.status = 'disabled';
+    account.disabledReason = reason;
+    account.disabledAt = new Date().toISOString();
+
+    logger.info(`Account ${account.id} disabled due to: ${reason}`);
+
+    // 如果账户有余额，自动转移到主账户
+    if (account.balance && account.balance > 0.01) {
+      try {
+        const SolanaClient = require('./solana-client');
+        const config = await require('fs-extra').readJson(require('path').join(__dirname, '../config/config.json'));
+        const solanaClient = new SolanaClient(config.solana || {});
+        
+        const mainAccount = config.main?.mainAccount;
+        if (!mainAccount) {
+          logger.error('Main account not configured, cannot transfer balance');
+          await this.saveAccounts();
+          return { success: true, transferred: false, error: 'Main account not configured' };
         }
-        process.exit(0);
-      })
-      .catch(error => {
-        console.error('Failed to generate accounts:', error.message);
-        process.exit(1);
-      });
-  } else if (args.includes('--stats')) {
-    accountManager.loadAccounts()
-      .then(() => {
-        const stats = accountManager.getAccountStats();
-        console.log('Account Statistics:');
-        console.log(`  Total: ${stats.total}`);
-        console.log(`  Active: ${stats.active}`);
-        console.log(`  Disabled: ${stats.disabled}`);
-        console.log(`  Total Balance: ${stats.totalBalance / 1e9} SOL`);
-        console.log(`  Average Balance: ${stats.averageBalance / 1e9} SOL`);
-        process.exit(0);
-      })
-      .catch(error => {
-        console.error('Failed to load accounts:', error.message);
-        process.exit(1);
-      });
-  } else {
-    console.log('Usage:');
-    console.log('  node account-manager.js --generate [count]  # Generate accounts');
-    console.log('  node account-manager.js --stats             # Show statistics');
-    process.exit(1);
+
+        // 转移余额，保留少量手续费
+        const transferAmount = Math.max(0, account.balance - 0.001);
+        if (transferAmount > 0) {
+          const transferResult = await solanaClient.transfer(
+            account.privateKey, 
+            mainAccount, 
+            transferAmount
+          );
+
+          if (transferResult.success) {
+            logger.info(`Successfully transferred ${transferAmount} SOL from disabled account ${account.id} to main account`);
+            account.balance = account.balance - transferAmount; // 更新余额
+            account.lastTransfer = new Date().toISOString();
+          } else {
+            logger.error(`Failed to transfer balance from disabled account ${account.id}: ${transferResult.error}`);
+          }
+
+          await this.saveAccounts();
+          return { 
+            success: true, 
+            transferred: transferResult.success, 
+            amount: transferResult.success ? transferAmount : 0,
+            transferError: transferResult.error 
+          };
+        }
+      } catch (error) {
+        logger.error(`Error transferring balance from disabled account ${account.id}:`, error);
+        await this.saveAccounts();
+        return { success: true, transferred: false, error: error.message };
+      }
+    }
+
+    await this.saveAccounts();
+    return { success: true, transferred: false, amount: 0 };
+  }
+
+  /**
+   * 检查是否所有账户都已停用
+   */
+  areAllAccountsDisabled() {
+    const activeAccounts = this.accounts.filter(acc => acc.status === 'active');
+    return activeAccounts.length === 0;
+  }
+
+  /**
+   * 重新生成所有子账户（清空旧的）
+   */
+  async regenerateAllAccounts(count = 50) {
+    logger.info('Regenerating all sub-accounts...');
+    
+    // 清空旧账户
+    this.accounts = [];
+    this.meta = {
+      generated: false,
+      count: 0,
+      lastUsedIndex: -1,
+      created: null,
+      updated: null
+    };
+
+    // 生成新账户
+    const result = await this.generateAccounts(count);
+    
+    if (result.success > 0) {
+      logger.info(`Successfully regenerated ${result.success} new accounts`);
+      return { success: true, count: result.success };
+    } else {
+      logger.error('Failed to regenerate accounts');
+      return { success: false, error: 'Failed to generate new accounts' };
+    }
   }
 }
 

@@ -373,11 +373,13 @@ class SolanaAirdropBot {
         // 主账户余额现在由前端直接从链上查询，后端不再查询以提高响应速度
         
         return {
-            status: {
+            status: this.scheduler ? this.scheduler.getStatus() : {
                 running: this.isRunning,
+                isHibernating: false,
+                nextResetTime: null,
                 startTime: this.startTime,
                 uptime: this.startTime ? Date.now() - this.startTime.getTime() : 0,
-                failureCount: this.scheduler ? this.scheduler.getFailureCount() : 0
+                failureCount: 0
             },
             stats: this.scheduler ? this.scheduler.stats : this.stats,
             accounts: accountsWithSol,
